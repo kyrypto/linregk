@@ -1,0 +1,1252 @@
+// This Source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © TroII
+// Credit to RegisL76 for original strategy, R3c0nTrader for safe orders, CryptoRox for kelly ratio
+
+// ******************** //
+// © TroII //
+// V 5.0
+// ******************** //
+
+//@version=5
+// TradingView Pine V5 //
+
+//IMPORTANT: This strategy is meant for use with AutoView on crypto futures. Strategy uses INITIAL CAPITAL strategy value to calculate bids, and this will decide the base size for each order.
+//The decimals parameter is meant to make calculations as accurate as possible with reality by truncating the decimals and using the exact amount AutoView will use.
+//To do this on an exchange, for example, ByBit, start a market order, and start entering the quantity. Enter 0.000*, and when you reach the max number of decimals,
+//count them, then enter them in "Decimals."
+//Autoview users: enter the initial capital value, choose the number of decimals and safe orders, and create an alert with {{strategy.order.alert_message}} in the message field.
+
+//Strategy LinReg with Kelly Ratio (AutoView alerts) DCA edition v5 public edition
+// *********************************************************************************************************************************************************************************************************** //
+// *********************************************************************************************************************************************************************************************************** //
+strategy('Strategy Linear Regression with Kelly Ratio DCA private edition',shorttitle='LinRegK-DCA Private', overlay=true, commission_value=0.1,
+         initial_capital=100, default_qty_type= strategy.cash, margin_long = 1./30*50, margin_short = 1./30*50, pyramiding=999, max_labels_count=500, max_lines_count=500, max_bars_back=5000)
+//kelly ratio
+stake = input.float(100, title="Enter Stake Per Order", step=100)
+c = close
+krp = strategy.wintrades / strategy.closedtrades
+krw =  strategy.grossprofit / strategy.wintrades
+krl = strategy.grossloss / strategy.losstrades
+kr = ((krp - (1-krp) / (krw/krl)) * 100) / 100
+qty = stake
+qty := stake / c
+if kr > 0
+    qty := (strategy.equity * kr) / c
+
+
+
+
+// truncate() truncates a given number
+// to a certain number of decimals
+truncate(number, decimals) =>
+    factor = math.pow(10, decimals)
+    int(number * factor) / factor
+    
+decimal_places = input.float(2, title="Decimals", step=1)
+qty_1 = truncate(qty, decimal_places)
+// ****************************************************************************************************************************************** // 
+// *************************************************** LINEAR REGRESSION INPUTS ************************************************************* //
+CONFIG = input.string('CONFIG-->>',tooltip='MEMO -->> H1 Is DEFAULT'
+ +'\nH1 BTCUSDT Perp : Low - 60 - 6 - 2.1 - 3 - REVERSAL'
+ +'\n---------------------------------------------------------------'
+ +'\n1m  BTCUSDT Perp : Low - 124  -  3 - 3.2 -  2 - Regular' 
+ +'\n3m  BTCUSDT Perp : Low -  45  - 35 - 2.7 -  2 - REVERSAL'
+ +'\n5m  BTCUSDT Perp : Low - 220  - 16 - 1.7 - 10 - Regular'
+ +'\n15m BTCUSDT Perp : Low - 187  - 2 - 1.0 -  7 - REVERSAL'
+ +'\n30m BTCUSDT Perp : Low - 119  - 0 - 0.8 -  7 - REVERSAL' 
+ +'\nH2  BTCUSDT Perp : Low -  34  -  2 - 2.4 -  3 - REVERSAL'
+ +'\nH3  BTCUSDT Perp : Low -  70  -  4 - 2.0 -  3 - REVERSAL'
+ +'\nH4  BTCUSDT Perp : Low -  22  -  2 - 1.6 -  4 - REVERSAL'
+ +'\nD   BTCUSDT Perp : Low -  54  -  1 - 1.8 -  7 - REVERSAL'
+ +'\nW   BTCUSDT Perp : Low -   5  -  0 - 0.7 -  7 - REVERSAL' 
+ +'\nONLY FOR : '
+ +'\n1m 3m 5m 15m 30m H2 H3 H4 DAILY WEEKLY'
+ +'\nIF "CONF AUTO"',confirm=false, group='CONFIRMATION NEEDED')
+
+NOTA            = input.string('READ i -->>',tooltip='Inputs Marked With * Influence The Result Of The Stategy !',confirm=false, group='CONFIRMATION NEEDED')
+conf_auto       = input.bool  (true,'CONF AUTO 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY*',
+ tooltip='CONF AUTO Only For Timeframe 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY, ELSE ALL OTHER TF = CONF H1 !',confirm=false, group='CONFIRMATION NEEDED')
+
+source          = input          (ohlc4,   'COMMON SOURCE*',tooltip='(Default is "ohlc4")',                                        group='DEFAULT SOURCE FOR ALL TF')
+
+// ------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------- //
+length          = input.int      (60,    'LENGTH H1* --',                minval=1,                  group='DEFAULT CONFIG H1 & ALL TF, EXCEPT 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY IF CONF AUTO',inline='DEFAULT')
+offset          = input.int      (6,     'OFFSET H1* -----',             minval=0,                  group='DEFAULT CONFIG H1 & ALL TF, EXCEPT 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY IF CONF AUTO',inline='DEFAULT')
+dev             = input.float    (2.1,   'DEVIATION H1*',                minval=0.1,      step=0.1, group='DEFAULT CONFIG H1 & ALL TF, EXCEPT 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY IF CONF AUTO',inline='DEFAULT') 
+smoothing       = input.int      (3,     'SMOOTHING H1*',                minval=1,                  group='DEFAULT CONFIG H1 & ALL TF, EXCEPT 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY IF CONF AUTO',inline='DEFAULT')
+reversal        = input          (true,  'REVERSAL H1*',                                            group='DEFAULT CONFIG H1 & ALL TF, EXCEPT 1m 3m 5m 15m 30m H1 H2 H3 H4 DAILY WEEKLY IF CONF AUTO',inline='DEFAULT',                                                    
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// ------------------------------------------------------------------------------------------------- //
+// ------------------------------------------------------------------------------------------------- //
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_1m       = input.int      (124,   'LENGTH 1m* --',                 minval=1,                  group='CONFIG ONLY FOR 1m, IF CONF AUTO',                         inline='1m')
+offset_1m       = input.int      (3,     'OFFSET 1m* -----' ,             minval=0,                  group='CONFIG ONLY FOR 1m, IF CONF AUTO',                         inline='1m')
+dev_1m          = input.float    (3.2,   'DEVIATION 1m*',                 minval=0.1,      step=0.1, group='CONFIG ONLY FOR 1m, IF CONF AUTO',                         inline='1m') 
+smoothing_1m    = input.int      (2,     'SMOOTHING 1m*',                 minval=1,                  group='CONFIG ONLY FOR 1m, IF CONF AUTO',                         inline='1m')
+reversal_1m     = input          (false, 'REVERSAL 1m*',                                             group='CONFIG ONLY FOR 1m, IF CONF AUTO',                         inline='1m',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** // 
+// *********************************************************************************************************************** //
+length_3m       = input.int      (45,   'LENGTH 3m* --',                 minval=1,                  group='CONFIG ONLY FOR 3m, IF CONF AUTO',                         inline='3m')
+offset_3m       = input.int      (35,   'OFFSET 3m* -----' ,             minval=0,                  group='CONFIG ONLY FOR 3m, IF CONF AUTO',                         inline='3m')
+dev_3m          = input.float    (2.7,  'DEVIATION 3m*',                 minval=0.1,      step=0.1, group='CONFIG ONLY FOR 3m, IF CONF AUTO',                         inline='3m') 
+smoothing_3m    = input.int      (2,    'SMOOTHING 3m*',                 minval=1,                  group='CONFIG ONLY FOR 3m, IF CONF AUTO',                         inline='3m')
+reversal_3m     = input          (true, 'REVERSAL 3m*',                                             group='CONFIG ONLY FOR 3m, IF CONF AUTO',                         inline='3m',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_5m       = input.int      (220,    'LENGTH 5m* --',               minval=1,                  group='CONFIG ONLY FOR 5m, IF CONF AUTO',                         inline='5m')
+offset_5m       = input.int      (16,     'OFFSET 5m* -----' ,           minval=0,                  group='CONFIG ONLY FOR 5m, IF CONF AUTO',                         inline='5m')
+dev_5m          = input.float    (1.7,    'DEVIATION 5m*',               minval=0.1,      step=0.1, group='CONFIG ONLY FOR 5m, IF CONF AUTO',                         inline='5m')
+smoothing_5m    = input.int      (10,     'SMOOTHING 5m*',               minval=1,                  group='CONFIG ONLY FOR 5m, IF CONF AUTO',                         inline='5m')
+reversal_5m     = input          (false,  'REVERSAL 5m*',                                           group='CONFIG ONLY FOR 5m, IF CONF AUTO',                         inline='5m',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_15m       = input.int      (187,   'LENGTH 15m* --',              minval=1,                  group='CONFIG ONLY FOR 15m, IF CONF AUTO',                        inline='15m')
+offset_15m       = input.int      (2,     'OFFSET 15m* -----' ,          minval=0,                  group='CONFIG ONLY FOR 15m, IF CONF AUTO',                        inline='15m')
+dev_15m          = input.float    (1.0,   'DEVIATION 15m*',              minval=0.1,      step=0.1, group='CONFIG ONLY FOR 15m, IF CONF AUTO',                        inline='15m')
+smoothing_15m    = input.int      (7,     'SMOOTHING 15m*',              minval=1,                  group='CONFIG ONLY FOR 15m, IF CONF AUTO',                        inline='15m')
+reversal_15m     = input          (true,  'REVERSAL 15m*',                                          group='CONFIG ONLY FOR 15m, IF CONF AUTO',                        inline='15m',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_30m       = input.int      (119,   'LENGTH 30m* --',              minval=1,                  group='CONFIG ONLY FOR 30m, IF CONF AUTO',                        inline='30m')
+offset_30m       = input.int      (0,     'OFFSET 30m* -----' ,          minval=0,                  group='CONFIG ONLY FOR 30m, IF CONF AUTO',                        inline='30m')
+dev_30m          = input.float    (0.8,   'DEVIATION 30m*',              minval=0.1,      step=0.1, group='CONFIG ONLY FOR 30m, IF CONF AUTO',                        inline='30m')
+smoothing_30m    = input.int      (7,     'SMOOTHING 30m*',              minval=1,                  group='CONFIG ONLY FOR 30m, IF CONF AUTO',                        inline='30m')
+reversal_30m     = input          (true,  'REVERSAL 30m*',                                          group='CONFIG ONLY FOR 30m, IF CONF AUTO',                        inline='30m',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_H2       = input.int      (34,     'LENGTH H2* --',               minval=1,                  group='CONFIG ONLY FOR H2, IF CONF AUTO',                          inline='H2')
+offset_H2       = input.int      (2,      'OFFSET H2* -----' ,           minval=0,                  group='CONFIG ONLY FOR H2, IF CONF AUTO',                          inline='H2')
+dev_H2          = input.float    (2.4,    'DEVIATION H2*',               minval=0.1,      step=0.1, group='CONFIG ONLY FOR H2, IF CONF AUTO',                          inline='H2') 
+smoothing_H2    = input.int      (3,      'SMOOTHING H2*',               minval=1,                  group='CONFIG ONLY FOR H2, IF CONF AUTO',                          inline='H2')
+reversal_H2     = input          (true,   'REVERSAL _H2*',                                           group='CONFIG ONLY FOR H2, IF CONF AUTO',                         inline='H2',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_H3       = input.int      (70,     'LENGTH H3* --',               minval=1,                  group='CONFIG ONLY FOR H3, IF CONF AUTO',                          inline='H3')
+offset_H3       = input.int      (4,      'OFFSET H3* -----' ,           minval=0,                  group='CONFIG ONLY FOR H3, IF CONF AUTO',                          inline='H3')
+dev_H3          = input.float    (2.0,    'DEVIATION H3*',               minval=0.1,      step=0.1, group='CONFIG ONLY FOR H3, IF CONF AUTO',                          inline='H3') 
+smoothing_H3    = input.int      (3,      'SMOOTHING H3*',               minval=1,                  group='CONFIG ONLY FOR H3, IF CONF AUTO',                          inline='H3')
+reversal_H3     = input          (true,   'REVERSAL H3*',                                           group='CONFIG ONLY FOR H3, IF CONF AUTO',                          inline='H2',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_H4       = input.int      (22,     'LENGTH H4* --',               minval=1,                  group='CONFIG ONLY FOR H4, IF CONF AUTO',                          inline='H4')
+offset_H4       = input.int      (2,      'OFFSET H4* -----' ,           minval=0,                  group='CONFIG ONLY FOR H4, IF CONF AUTO',                          inline='H4')
+dev_H4          = input.float    (1.6,    'DEVIATION H4*',               minval=0.1,      step=0.1, group='CONFIG ONLY FOR H4, IF CONF AUTO',                          inline='H4') 
+smoothing_H4    = input.int      (4,      'SMOOTHING H4*',               minval=1,                  group='CONFIG ONLY FOR H4, IF CONF AUTO',                          inline='H4')
+reversal_H4     = input          (true,   'REVERSAL H4*',                                           group='CONFIG ONLY FOR H4, IF CONF AUTO',                          inline='H4',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_D       = input.int      (54,      'LENGTH Daily* --',             minval=1,                 group='CONFIG ONLY FOR DAILY, IF CONF AUTO',                       inline='DAILY')
+offset_D       = input.int      (1,       'OFFSET Daily* -----' ,         minval=0,                 group='CONFIG ONLY FOR DAILY, IF CONF AUTO',                       inline='DAILY')
+dev_D          = input.float    (1.8,     'DEVIATION Daily*',             minval=0.1,      step=0.1,group='CONFIG ONLY FOR DAILY, IF CONF AUTO',                       inline='DAILY') 
+smoothing_D    = input.int      (7,       'SMOOTHING Daily*',             minval=1,                 group='CONFIG ONLY FOR DAILY, IF CONF AUTO',                       inline='DAILY')
+reversal_D     = input          (true,    'REVERSAL Daily*',                                        group='CONFIG ONLY FOR DAILY, IF CONF AUTO',                       inline='DAILY',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+// *********************************************************************************************************************** //
+length_W       = input.int      (5,       'LENGTH Weekly* --',            minval=1,                 group='CONFIG ONLY FOR WEEKLY, IF CONF AUTO',                      inline='WEEKLY')
+offset_W       = input.int      (0,       'OFFSET Weekly* -----' ,        minval=0,                 group='CONFIG ONLY FOR WEEKLY, IF CONF AUTO',                      inline='WEEKLY')
+dev_W          = input.float    (0.7,     'DEVIATION Weekly*',            minval=0.1,     step=0.1, group='CONFIG ONLY FOR WEEKLY, IF CONF AUTO',                      inline='WEEKLY') 
+smoothing_W    = input.int      (7,       'SMOOTHING Weekly*',            minval=1,                 group='CONFIG ONLY FOR WEEKLY, IF CONF AUTO',                      inline='WEEKLY')
+reversal_W     = input          (true,    'REVERSAL Weekly*',                                       group='CONFIG ONLY FOR WEEKLY, IF CONF AUTO',                      inline='WEEKLY',                              
+ tooltip='Reversal = Reversal Strategy Method (Buy = Sell & Sell = Buy) ! May Be Better Than The Regular Strategy !')
+// *********************************************************************************************************************** //
+sell_disable    = input       (false, 'BUY ONLY*',                                                    tooltip ='[Buy only] & [Sell only] both checked or both unchecked = [BUY + SELL]'
+ ,                                                                                                       group='For All TF',                                                   inline='ALLTF')
+ 
+buy_disable     = input       (false, 'SELL ONLY*',                                                   tooltip ='[Buy only] & [Sell only] both checked or both unchecked = [BUY + SELL]'
+ ,                                                                                                       group='For All TF',                                                   inline='ALLTF')
+
+// **************************************************** STOP LOSS Inputs ************************************************* //
+sl1             = input.float (0.15, 'STOP LOSS* A % ? (0 = Disable)', minval=0,maxval=1,step=0.01, tooltip='Stop Loss : 0 to 100 % with X10 or X100 [Default Value For All TimeFrame] H4 is default value'
+ ,                                                                                                       group='For All TF')
+ 
+sl2             = input.bool  (false,  'STOP LOSS* A X 10',                                            tooltip='Stop Loss Multiplier'
+ ,                                                                                                       group='For All TF',                                                    inline='SL')
+ 
+sl3             = input.bool  (true,  'STOP LOSS* A X 100',                                           tooltip='Stop Loss Multiplier'
+ ,                                                                                                       group='For All TF',                                                    inline='SL')
+ 
+no_sl           = input.bool  (false, 'DISABLE* STOP LOSS',                                            tooltip='Checked=Disable Stop Loss'
+ ,                                                                                                       group='For All TF')
+
+// **************************************************** TAKE PROFIT Inputs *********************************************** // 
+tp1             = input.float (0.75,  'TAKE PROFIT* A % ? (0 = Disable)',minval=0,maxval=100,step=0.01, tooltip='Take Profit : 0 to 500 % with X10 or X100 [Default Value For All TimeFrame] H4 is default value'
+ ,                                                                                                       group='For All TF')
+ 
+tp2             = input.bool  (false,  'TAKE PROFIT* A X 10',                                          tooltip='Take Profit Multiplier'
+ ,                                                                                                       group='For All TF',                                                     inline='TP')
+ 
+tp3             = input.bool  (true,  'TAKE PROFIT* A X 100',                                         tooltip='Take Profit Multiplier'
+ ,                                                                                                       group='For All TF',                                                     inline='TP')
+ 
+no_tp           = input.bool  (false, 'DISABLE* TAKE PROFIT',                                          tooltip='Checked=Disable Take Profit'
+ ,                                                                                                       group='For All TF')
+
+// **************************************************** DISPLAY Inputs *************************************************** //
+line_thick      = input.int   (2,     'LR Thickness',                    minval=1, maxval=4,             group='COMMON INPUTS DISPLAY',                                          inline='LR')
+signals         = input.string('Last 250 Bars', 'LR Signals Display', options=['Last 250 Bars', 'All'],  group='COMMON INPUTS DISPLAY',                                          inline='LR')
+
+color_up        = input.color (color.new(#82fc00,0),'Up Color'  ,                                        group='COMMON INPUTS DISPLAY',                                          inline='COLOR')
+color_down      = input.color (color.new(#ff0092,0),'Down Color',                                        group='COMMON INPUTS DISPLAY',                                          inline='COLOR')
+
+y_Pos_factor    = input.float (3.5,   'Label Y Position Factor',        minval=0.0,maxval=20.0,step=0.5, group='COMMON INPUTS DISPLAY')
+
+show_trade_info = input       (true,  'Show Trade Infos',                                           
+ tooltip='Display Or Not The Trade Infos Label',                                                         group='COMMON INPUTS DISPLAY',                                          inline='INFO')
+
+show_full_info = input        (false,  'Show Full Infos Label',                                           
+ tooltip='Display Full Or Simple Trade Infos Label',                                                     group='COMMON INPUTS DISPLAY',                                          inline='INFO')
+ 
+barscolors      = input       (true,  'Trend Bars Colors',                                            
+ tooltip='Displays Or Not The Color Of The Candles According To The Trend Of The Strategy, Instead Of The Standard Colors'
+ ,                                                                                                       group='COMMON INPUTS DISPLAY',                                          inline='INFO')
+ 
+trans_Col_bg    = input.float (86,    'Trend Background Transparency',  minval=86,  maxval=90,  step=1,  group='COMMON INPUTS DISPLAY')
+show_sl_line    = input.bool  (true, 'Show SL Line',                                                    group='COMMON INPUTS DISPLAY',                                          inline='SL-TP')
+show_tp_line    = input.bool  (true, 'Show TP Line', tooltip='Show TP / SL Lines & Backgrounds',        group='COMMON INPUTS DISPLAY',                                          inline='SL-TP')
+
+// ********************************************************************************************************************************************* //
+loop=length
+conf='[CONF H1]' // Default Conf //
+
+if (timeframe.period =='1') and conf_auto
+    smoothing:=smoothing_1m
+    loop:=length_1m
+    dev:=dev_1m
+    conf:='[CONF 1m]'
+    reversal:=reversal_1m
+
+if (timeframe.period =='3') and conf_auto
+    smoothing:=smoothing_3m
+    loop:=length_3m
+    dev:=dev_3m
+    conf:='[CONF 3m]'
+    reversal:=reversal_3m
+
+if (timeframe.period =='5') and conf_auto
+    smoothing:=smoothing_5m
+    loop:=length_5m
+    dev:=dev_5m
+    conf:='[CONF 5m]'
+    reversal:=reversal_5m
+
+if (timeframe.period =='15') and conf_auto
+    smoothing:=smoothing_15m
+    loop:=length_15m
+    dev:=dev_15m
+    conf:='[CONF 15m]'
+    reversal:=reversal_15m
+
+if (timeframe.period =='30') and conf_auto
+    smoothing:=smoothing_30m
+    loop:=length_30m
+    dev:=dev_30m
+    conf:='[CONF 30m]'
+    reversal:=reversal_30m
+
+if timeframe.period =='120' and conf_auto    
+    smoothing:=smoothing_H2
+    loop:=length_H2
+    dev:=dev_H2
+    conf:='[CONF H2]'
+    reversal:=reversal_H2
+
+if timeframe.period =='180' and conf_auto    
+    smoothing:=smoothing_H3
+    loop:=length_H3
+    dev:=dev_H3
+    conf:='[CONF H3]'
+    reversal:=reversal_H3
+
+if timeframe.period =='240' and conf_auto    
+    smoothing:=smoothing_H4
+    loop:=length_H4
+    dev:=dev_H4
+    conf:='[CONF H4]'
+    reversal:=reversal_H4
+
+if timeframe.period =='D' and conf_auto    
+    smoothing:=smoothing_D
+    loop:=length_D
+    dev:=dev_D
+    conf:='[CONF D]'
+    reversal:=reversal_D
+
+if timeframe.period =='W' and conf_auto    
+    smoothing:=smoothing_W
+    loop:=length_W
+    dev:=dev_W
+    conf:='[CONF W]'
+    reversal:=reversal_W
+
+data(x) =>
+    ta.sma(request.security(syminfo.tickerid,timeframe.period, x), smoothing)
+    
+// ********************************************************************************************************************************************* //
+// Default Conf //
+linreg   = data(ta.linreg(source, length, offset))
+linreg_p = data(ta.linreg(source, length, offset + 1))
+
+if (timeframe.period =='1') and conf_auto
+    linreg   := data(ta.linreg(source, length_1m, offset_1m))
+    linreg_p := data(ta.linreg(source, length_1m, offset_1m + 1))
+
+if (timeframe.period =='3') and conf_auto
+    linreg   := data(ta.linreg(source, length_3m, offset_3m))
+    linreg_p := data(ta.linreg(source, length_3m, offset_3m + 1))
+
+if timeframe.period =='5' and conf_auto
+    linreg   := data(ta.linreg(source, length_5m, offset_5m))
+    linreg_p := data(ta.linreg(source, length_5m, offset_5m + 1))
+
+if timeframe.period =='15' and conf_auto
+    linreg   := data(ta.linreg(source, length_15m, offset_15m))
+    linreg_p := data(ta.linreg(source, length_15m, offset_15m + 1))
+
+if timeframe.period =='30' and conf_auto
+    linreg   := data(ta.linreg(source, length_30m, offset_30m))
+    linreg_p := data(ta.linreg(source, length_30m, offset_30m + 1))
+    
+if timeframe.period =='120' and conf_auto
+    linreg   := data(ta.linreg(source, length_H2, offset_H2))
+    linreg_p := data(ta.linreg(source, length_H2, offset_H2 + 1))
+
+if timeframe.period =='180' and conf_auto
+    linreg   := data(ta.linreg(source, length_H3, offset_H3))
+    linreg_p := data(ta.linreg(source, length_H3, offset_H3 + 1))
+
+if timeframe.period =='240' and conf_auto
+    linreg   := data(ta.linreg(source, length_H4, offset_H4))
+    linreg_p := data(ta.linreg(source, length_H4, offset_H4 + 1))
+
+if timeframe.period =='D' and conf_auto
+    linreg   := data(ta.linreg(source, length_D, offset_D))
+    linreg_p := data(ta.linreg(source, length_D, offset_D + 1))
+
+if timeframe.period =='W' and conf_auto
+    linreg   := data(ta.linreg(source, length_W, offset_W))
+    linreg_p := data(ta.linreg(source, length_W, offset_W + 1))
+    
+// ********************************************************************************************************************************************* //
+x = bar_index 
+slope = linreg - linreg_p
+intercept = linreg - x * slope
+deviationSum = 0.0
+
+for i = 0 to loop - 1 by 1
+    deviationSum += math.pow(source[i] - (slope * (x - i) + intercept), 2)
+    deviationSum
+    
+deviation = math.sqrt(deviationSum / length)
+
+// Default Conf //
+x1 = x - length
+y1 = slope * (x - length) + intercept
+
+if (timeframe.period =='1') and conf_auto
+    deviation := math.sqrt(deviationSum / length_1m)
+    x1 := x - length_1m
+    y1 := slope * (x - length_1m) + intercept
+
+if (timeframe.period =='3') and conf_auto
+    deviation := math.sqrt(deviationSum / length_3m)
+    x1 := x - length_3m
+    y1 := slope * (x - length_3m) + intercept
+
+if (timeframe.period =='5') and conf_auto
+    deviation := math.sqrt(deviationSum / length_5m)
+    x1 := x - length_5m
+    y1 := slope * (x - length_5m) + intercept
+    
+if (timeframe.period =='15') and conf_auto
+    deviation := math.sqrt(deviationSum / length_15m)
+    x1 := x - length_15m
+    y1 := slope * (x - length_15m) + intercept
+
+if (timeframe.period =='30') and conf_auto
+    deviation := math.sqrt(deviationSum / length_30m)
+    x1 := x - length_30m
+    y1 := slope * (x - length_30m) + intercept
+
+if timeframe.period =='120' and conf_auto
+    deviation := math.sqrt(deviationSum / length_H2)
+    x1 := x - length_H2
+    y1 := slope * (x - length_H2) + intercept
+
+if timeframe.period =='180' and conf_auto
+    deviation := math.sqrt(deviationSum / length_H3)
+    x1 := x - length_H3
+    y1 := slope * (x - length_H3) + intercept
+
+if timeframe.period =='240' and conf_auto
+    deviation := math.sqrt(deviationSum / length_H4)
+    x1 := x - length_H4
+    y1 := slope * (x - length_H4) + intercept
+
+if timeframe.period =='D' and conf_auto
+    deviation := math.sqrt(deviationSum / length_D)
+    x1 := x - length_D
+    y1 := slope * (x - length_D) + intercept
+
+if timeframe.period =='W' and conf_auto
+    deviation := math.sqrt(deviationSum / length_W)
+    x1 := x - length_W
+    y1 := slope * (x - length_W) + intercept
+
+x2 = x
+y2 = linreg
+
+// ********************************************************************************************************************************************* //
+b  = line(na) 
+dp = line(na)
+dm = line(na)
+
+b := line.new(x1, y1, x2, y2, xloc.bar_index, extend.right, color.white, width=line_thick)
+line.delete(b[1])
+
+dp := line.new(x1, deviation * dev + y1, x2, deviation * dev + y2,   xloc.bar_index, extend.right, color_up, width=line_thick)
+line.delete(dp[1])
+
+dm := line.new(x1, -deviation * dev + y1, x2, -deviation * dev + y2, xloc.bar_index, extend.right, color_down, width=line_thick)
+line.delete(dm[1])
+
+// ********************************************************************************************************************************************* //
+dm_current = -deviation * dev + y2
+dp_current = deviation  * dev + y2
+
+// *** Linear Regression Buy & Sell Signal*** //
+buy  = ta.crossunder (close, dm_current)
+sell = ta.crossover  (close, dp_current)
+
+// ********************************************************************************************************************************************* //
+plotshape(ta.crossunder(close, dm_current) ? buy : na,'Bottom Triangle Buy/Sell', style=shape.xcross, location=location.bottom ,   
+ color=not reversal ? color.new(#aaeeaa, 0) : color.new(#eeaaaa, 0) ,size=size.small,show_last=signals == 'All' ? 99999999 : 250)
+ 
+plotshape(ta.crossover(close, dp_current) ? sell : na,'Top Triangle Buy/Sell',    style=shape.xcross, location=location.top,
+ color=not reversal ? color.new(#eeaaaa, 0) : color.new(#aaeeaa, 0) ,size=size.small,show_last=signals == 'All' ? 99999999 : 250)
+
+plotshape(not reversal ? buy  : na, 'BUY', shape.xcross,location.top,   color.new(#aaeeaa, 0),size=size.small,
+ text='Buy', textcolor=color.new(color.black, 0),show_last=signals == 'All' ? 99999999 : 250)
+ 
+plotshape(not reversal ? sell : na, 'SELL',shape.xcross,location.bottom,color.new(#eeaaaaed, 0),size=size.small,
+ text='Sell',textcolor=color.new(color.black, 0),show_last=signals == 'All' ? 99999999 : 250)
+
+plotshape(reversal ? buy  : na, 'SELL Rv', shape.xcross,  location.top,   color.new(#eeaaaa, 0),size=size.small,
+ text='Sell\nRv',textcolor=color.new(color.black, 0),show_last=signals == 'All' ? 99999999 : 250)
+ 
+plotshape(reversal ? sell : na, 'BUY Rv',  shape.xcross,    location.bottom,color.new(#aaeeaa, 0),size=size.small,
+ text='Buy\nRv', textcolor=color.new(color.black, 0),show_last=signals == 'All' ? 99999999 : 250)
+
+// ******************************************************************************** // 
+// *** Define F_print_last function For Current Trade Infos *** //
+f_print_last(_offsetx, _offsety, _lab_styl, _bkg_color, _text, _color_text, _size) =>
+    // *** Create label *** //.
+    var _label = label(na)
+    label.delete(_label)
+    _label := label.new(bar_index+_offsetx, _offsety, _text, xloc.bar_index, yloc.price, _bkg_color, _lab_styl, _color_text, _size, text.align_center)
+    _label
+
+// ******************************************************************************** // 
+// *** Define F_print2 function For Trades Infos *** //
+f_print2(_offsetx, _offsety, _lab_styl, _bkg_color, _text, _color_text, _size) =>
+    // *** Create label *** //.
+    var _label = label(na)
+    // label.delete(_label) // permanent label //
+    _label := label.new(bar_index + _offsetx, _offsety, _text, xloc.bar_index, yloc.price, _bkg_color, _lab_styl, _color_text, _size, text.align_center)
+    _label
+
+// ******************************************************************************** //
+// [Buy Only] & [Sell Only]' both checked or no checked = [BUY + SELL]              //
+if (buy_disable and sell_disable) or (not buy_disable and not sell_disable)
+    buy_disable:=false
+    sell_disable:=false
+    
+// ******************************************************************************** // 
+// Managing Stop Loss Multipliers         //
+sl=sl1
+if sl2 and not sl3 and sl>0
+    sl:=sl1*10
+else 
+    if sl3 and sl>0
+        sl:=sl1*100
+if no_sl
+    sl:=0
+
+// *************************************** // 
+stp_loss_enable=bool(na)
+if sl==0
+    stp_loss_enable:=false
+else
+    stp_loss_enable:=true
+
+// *************************************** // 
+// Managing Take Profit Multipliers        //
+tp=tp1
+if tp2 and not tp3 and tp>0
+    tp:=tp1*10
+else 
+    if tp3 and tp>0
+        tp:=tp1*100
+if no_tp
+    tp:=0
+
+// *************************************** // 
+tp_enable=bool(na)
+if tp==0
+    tp_enable:=false
+else
+    tp_enable:=true  
+
+// ******************************************************************************************************************** // 
+trend = -1
+trend := nz(trend[1], trend)
+
+// ************************************************ LINEAR REGRESSION METHOD ***************************************** //
+// Trend == 1 --> Long If Not Reverse //
+if not reversal 
+    trend := trend == -1 and buy ? 1 : trend == 1 and sell ? -1 : trend
+else
+    trend := trend == 1 and buy ? -1 : trend == -1 and sell ? 1 : trend
+
+changeCond = trend != trend[1]
+
+// ********************************************************************************************************************* // 
+var no_bar=int(0)
+varip int no_trend =0 // Varip //
+var last_trend=int(na)
+//-------------------------//
+no_bar:=no_bar+1
+last_trend:=no_bar-no_trend
+varip trade = int(0)
+//-------------------------//
+if changeCond
+    no_trend := no_bar
+    
+// ******************************************************************************** // 
+var buySignal=bool(na) 
+
+if not reversal
+    buySignal:= changeCond and trend == 1
+else
+    buySignal:= changeCond and trend == -1
+
+// ******************************************************************************** // 
+var sellSignal = bool(na)
+
+if not reversal
+    sellSignal:= changeCond and trend == -1
+else
+    sellSignal:= changeCond and trend == 1
+
+// ******************************************************************************** // 
+var bool sl_lg       =na
+var bool sl_sh       =na
+var bool stop_loss   =na
+
+var bool tp_lg       =na
+var bool tp_sh       =na
+var bool take_profit =na
+
+// ********************************************************************************************************** // 
+// ********************************************************************************************************** //
+// ********************************************************************************************************** //
+// ************************** modifying this section is not recommended ! *********************************** //
+// ********************************************************************************************************** //
+if (changeCond and not buy_disable and not sell_disable) and trade==0 // ************************************ //
+    trade:=trade+1                                                    // ************************************ //  
+else 
+    if (changeCond and not buy_disable and not sell_disable)          // ************************************ //
+        trade:=trade+1
+
+if  trade==0 and not reversal and buySignal and sell_disable          // ************************************ //
+    trade:=trade+1
+
+if  trade==0 and not reversal and sellSignal and buy_disable          // ************************************ //
+    trade:=trade+1
+    
+if  trade==0 and reversal and buySignal and buy_disable               // ************************************ //
+    trade:=trade+1
+
+if  trade==0 and reversal and sellSignal and sell_disable             // ************************************ //
+    trade:=trade+1    
+// ********************************************************************************************************** //
+
+// ******************************************************************************** // 
+// ******************************* STRATEGY *************************************** //
+// ******************************************************************************** // 
+var str_lg=bool(na)
+var str_sh=bool(na)
+
+// !!! Varip ->start_price!!!
+varip start_price=float(na) // varip //
+
+//**************************************************************************//
+// Trend == 1 --> Long Normal
+if trend == 1 and changeCond and not reversal and not str_lg
+    str_lg:=true
+    str_sh:=false
+    start_price:=close
+    sl_lg:=false
+    sl_sh:=false
+    tp_lg:=false
+    tp_sh:=false
+
+// Trend == -1 --> Short Normal
+if trend == -1 and changeCond and not reversal and not str_sh
+    str_lg:=false
+    str_sh:=true
+    start_price:=close
+    sl_lg:=false
+    sl_sh:=false
+    tp_lg:=false
+    tp_sh:=false
+
+//**************************************************************************//
+// Trend == -1 -->Short Reversal
+if trend == -1 and changeCond and reversal and not str_sh
+    str_lg:=false
+    str_sh:=true
+    start_price:=close
+    sl_lg:=false
+    sl_sh:=false
+    tp_lg:=false
+    tp_sh:=false
+
+// Trend == 1 --> Long Reversal
+if trend == 1 and changeCond and reversal and not str_lg
+    str_lg:=true
+    str_sh:=false
+    start_price:=close
+    sl_lg:=false
+    sl_sh:=false
+    tp_lg:=false
+    tp_sh:=false
+//Safe Order calc/inputs
+sourceInput = input.source(ohlc4, "Source")
+price_deviation = input.float(1, title='Price deviation to open safety orders (%)', step=0.1, minval=0.0) / 100
+//safe_order_volume_scale = input.float(2, step=0.1, title='Safety order volume scale')
+safe_order_step_scale = input.float(1.4, step=0.1, title='Safety order step scale')
+max_safe_order = input(3, title='Max safety orders')
+
+var current_so = 0
+var current_S_so = 0
+
+var initial_order = 0.0
+var previous_high_value = 0.0
+var original_ttp_value = 0.0
+// **************************************************************************************************************************************************** // 
+// ************************************************ Strategy Entry LG - SH - LG Rev - SH Rev ********************************************************** //
+// **************************************************************************************************************************************************** // 
+if not reversal and str_lg and not buy_disable and buySignal
+    strategy.entry('Lg', strategy.long, qty_1, when = not reversal and str_lg and not buy_disable,  alert_message = "b=long q=" + str.tostring(qty_1) + " t=market | delay 3 | b=short c=position t=market cot=1", comment = 'Lg '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    initial_order := sourceInput
+    current_so := 1
+    previous_high_value := 0.0
+    original_ttp_value := 0
+    original_ttp_value
+
+if not reversal and str_sh and not sell_disable and sellSignal
+    strategy.entry('Sh', strategy.short, qty_1, when = not reversal and str_sh and not sell_disable,  alert_message = "b=short q=" + str.tostring(qty_1) + " t=market | delay 3 | b=long c=position t=market cot=1", comment = 'Sh '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    initial_order := sourceInput
+    current_S_so := 1
+    previous_high_value := 0.0
+    original_ttp_value := 0
+    original_ttp_value
+
+if reversal and str_lg and not buy_disable and sellSignal
+    strategy.entry('Lg Rev', strategy.long, qty_1, when = reversal and str_lg and not buy_disable,  alert_message = "b=long q=" + str.tostring(qty_1) + " t=market | delay 3 | b=short c=position t=market cot=1", comment = 'Lg Rev '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    initial_order := sourceInput
+    current_so := 1
+    previous_high_value := 0.0
+    original_ttp_value := 0
+    original_ttp_value
+
+if reversal and str_sh and not sell_disable and buySignal
+    strategy.entry('Sh Rev', strategy.short, qty_1, when = reversal and str_sh and not sell_disable,  alert_message = "b=short q=" + str.tostring(qty_1) + " t=market | delay 3 | b=long c=position t=market cot=1", comment = 'Sh Rev '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    initial_order := sourceInput
+    current_S_so := 1
+    previous_high_value := 0.0
+    original_ttp_value := 0
+    original_ttp_value
+    
+threshold = 0.0
+S_threshold = 0.0
+
+if strategy.position_size > 0
+    if safe_order_step_scale == 1.0
+        threshold := initial_order - initial_order * price_deviation * safe_order_step_scale * current_so
+        threshold
+
+    else if current_so <= max_safe_order
+        threshold := initial_order - initial_order * ((price_deviation * math.pow(safe_order_step_scale, current_so) - price_deviation) / (safe_order_step_scale - 1))
+        threshold
+
+    else if current_so > max_safe_order
+        threshold := initial_order - initial_order * ((price_deviation * math.pow(safe_order_step_scale, max_safe_order) - price_deviation) / (safe_order_step_scale - 1))
+        threshold
+else if strategy.position_size < 0
+    if safe_order_step_scale == 1.0
+        S_threshold := initial_order + initial_order * price_deviation * safe_order_step_scale * current_S_so
+        S_threshold
+    else if current_S_so <= max_safe_order
+        S_threshold := initial_order + initial_order * ((price_deviation * math.pow(safe_order_step_scale, current_S_so) - price_deviation) / (safe_order_step_scale - 1))
+        S_threshold
+
+    else if current_S_so > max_safe_order
+        S_threshold := initial_order + initial_order * ((price_deviation * math.pow(safe_order_step_scale, max_safe_order) - price_deviation) / (safe_order_step_scale - 1))
+        S_threshold
+
+// Average down when lowest candle value crosses below threshold
+if strategy.position_size > 0 and not buy_disable
+    if current_so > 0 and low <= threshold and current_so <= max_safe_order and previous_high_value == 0.0
+        // Trigger a safety order at the Safety Order "threshold" price
+        strategy.entry('DCA Long' + str.tostring(current_so) + '@' + str.tostring(threshold), strategy.long, when=str_lg and not buy_disable, qty=qty_1, alert_message = "b=long q=" + str.tostring(qty_1) + " t=market")
+        stop_loss:=false
+        take_profit:=false
+        current_so += 1
+        current_so
+// Short average up
+// Average down when lowest candle value crosses below threshold
+if strategy.position_size < 0 and not sell_disable
+    if current_S_so > 0 and high >= S_threshold and current_S_so <= max_safe_order and previous_high_value == 0.0
+        // Trigger a safety order at the Safety Order "threshold" price
+        strategy.entry('DCA Short' + str.tostring(current_S_so) + '@' + str.tostring(S_threshold), strategy.short, when=str_sh and not sell_disable, qty=qty_1, alert_message = "b=short q=" + str.tostring(qty_1) + " t=market")
+        stop_loss:=false
+        take_profit:=false
+        current_S_so += 1
+        current_S_so
+//**************************************************************************//
+// Plot All Long Safety Order lines except for last one as bright blue
+plot(strategy.position_size > 0 and current_so <= max_safe_order and current_so > 0 ? threshold : na, style=plot.style_linebr, color=color.new(#00ffff,0), linewidth=2, title="Safety Order")
+
+// Plot All Short Safety Order lines except for last one as bright blue
+plot(strategy.position_size < 0 and current_S_so <= max_safe_order and current_S_so > 0 ? S_threshold : na, style=plot.style_linebr, color=color.new(#00ffff,0), linewidth=2, title="Safety Order")
+
+// Plot Last Long Safety Order Line as Red
+plot(strategy.position_size > 0 and current_so > max_safe_order ? threshold : na, style=plot.style_linebr, color=color.red, linewidth=2, title="No Safety Orders Left")
+
+// Plot Last Short Safety Order Line as Red
+plot(strategy.position_size < 0 and current_S_so > max_safe_order ? S_threshold : na, style=plot.style_linebr, color=color.red, linewidth=2, title="No Safety Orders Left")
+
+// Plot Average Long Position Price Line as Orange
+plot(strategy.position_size > 0 ? strategy.position_avg_price : na, style=plot.style_linebr, color=color.orange, linewidth=2, title="Avg Position Price")
+
+// Plot Average Short Position Price Line as Orange
+plot(strategy.position_size < 0 ? strategy.position_avg_price : na, style=plot.style_linebr, color=color.orange, linewidth=2, title="Avg Position Price")
+
+// Fill TP Area and SO Area
+h1_long = plot(strategy.position_size > 0 ? strategy.position_avg_price : na, color=color.new(#000000,100), title="Avg Long Price Plot Area", display=display.none, editable=false)
+h1_short = plot(strategy.position_size < 0 ? strategy.position_avg_price : na, color=color.new(#000000,100), title="Avg Long Price Plot Area", display=display.none, editable=false)
+
+h2 = plot(threshold, color=color.new(#000000,100), title="SO Long Plot Area", display=display.none, editable=false)
+h3 = plot(S_threshold, color=color.new(#000000,100), title="SO Short Plot Area", display=display.none, editable=false)
+
+// Current SO Area
+fill(h1_long,h2,color=color.new(#CFECD2,70), title="SO Long Plot Area")
+fill(h1_short,h3,color=color.new(#E39882,70), title="SO Short Plot Area")
+
+// Price difference %   //
+d_per100=(close-close[last_trend])/math.max(close,close[last_trend])
+
+var txt_end_trade=''
+total_days=string(na)
+
+//**************************************************************************//
+if str.tonumber(timeframe.period)<=240
+    total_days:='\nHist '+str.format('{0,number,#.#} ', (bar_index*str.tonumber(timeframe.period)/1440)) +' DAYS'
+
+if timeframe.period=='D'
+    total_days:='\nHist '+str.format('{0,number,#.#} ', (bar_index)) +' DAYS'
+    
+if timeframe.period=='W'
+    total_days:='\nHist '+str.format('{0,number,#.#} ', (bar_index*7)) +' DAYS'
+ 
+if timeframe.period=='M'
+    total_days:='\nHist '+str.format('{0,number,#.#} ', (bar_index*30.4375)) +' DAYS'
+
+if timeframe.period!='M' and timeframe.period!='W' and timeframe.period!='D' and (str.tonumber(timeframe.period)>240 or str.tonumber(timeframe.period)<1)
+    total_days:='\nHist ???' + ' DAYS'
+    
+//**************************************************************************//
+since_days=string(na)
+since=bar_index-bar_index[last_trend]
+
+if barstate.islastconfirmedhistory
+    since:=bar_index-bar_index[last_trend]
+
+//**************************************************************************//
+if str.tonumber(timeframe.period)<=240
+    since_days:='\nSince '+str.format('{0,number,#.#} ', (since*str.tonumber(timeframe.period)/1440)) +' DAYS'
+
+if timeframe.period=='D'
+    since_days:='\nSince '+str.format('{0,number,#.#} ', (since)) +' DAYS'
+    
+if timeframe.period=='W'
+    since_days:='\nSince '+str.format('{0,number,#.#} ', (since*7)) +' DAYS'
+ 
+if timeframe.period=='M'
+    since_days:='\nSince '+str.format('{0,number,#.#} ', (since*30.4375)) +' DAYS'
+
+if timeframe.period!='M' and timeframe.period!='W' and timeframe.period!='D' and (str.tonumber(timeframe.period)>240 or str.tonumber(timeframe.period)<1)
+    since_days:='\nSince ???' + ' DAYS'
+tradeOpenPL() =>
+    sumProfit = 0.0
+    for tradeNo = 0 to strategy.opentrades - 1
+        sumProfit += strategy.opentrades.profit(tradeNo)
+    result = sumProfit
+//**************************************************************************//
+if show_full_info
+    txt_end_trade:='N° '+str.format('{0,number,#}',trade)+
+     '\n<'+syminfo.basecurrency +str.format(' {0,number,#.########} ',strategy.position_size)+
+     '\nSL '   +str.format('{0,number,#.###}',sl)+'%'+
+     '\nTP '   +str.format('{0,number,#.###}',tp)+'%'+
+     '\n<-E '  +str.format('{0,number,#.########} '+strategy.account_currency,close[last_trend])+
+     '\n=C '   +str.format('{0,number,#.########} '+strategy.account_currency,close)+
+     '\nd '    +str.format('{0,number,#.########} '+strategy.account_currency,close-close[last_trend])+
+     '\n%d '   +str.format('{0,number,#.##%}',d_per100)+
+     '\n=PnL ' +str.format('{0,number,#.##} '+ strategy.account_currency,tradeOpenPL())+
+     '\n[ Com '+str.format('{0,number,-#.## }'+ strategy.account_currency+' ]' ,strategy.opentrades.commission(0)*2)+
+     total_days+ 
+     since_days
+else
+    txt_end_trade:='N° '+str.format('{0,number,#}',trade)+
+     '\n%d '   +str.format('{0,number,#.##%}',d_per100)+
+     '\nPnL ' +str.format('{0,number,#.##} '+ strategy.account_currency,tradeOpenPL())+
+     '\nCom '+str.format('{0,number,-#.## }'+ strategy.account_currency+' ' ,strategy.opentrades.commission(0)*2)+
+     since_days
+
+// ************************************ //
+// Label Horizontal Position Setting    //
+atr = ta.sma(ta.tr, loop) 
+high_pos=ohlc4 + (y_Pos_factor * atr)
+low_pos=ohlc4  - (y_Pos_factor * atr)
+// ************************************ //
+
+// *************************************************************************************************************** //
+// *************************************************************************************************************** //
+var f2=label(na)
+if trade==0
+    label.delete(f2)
+pnl_color=color(na)
+
+if strategy.opentrades.profit(0)<=0
+    pnl_color:=color.new(#19034d,0)
+else
+    pnl_color:=color.new(#ffffff,0)
+    
+varip trade_dir=string(na)
+
+if buySignal and show_trade_info and not reversal and not buy_disable and math.abs(tradeOpenPL()) > 0
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#00bb00,40), 
+     'Lg '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Lg '
+ 
+if buySignal and show_trade_info and     reversal and not sell_disable and math.abs(tradeOpenPL()) > 0
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#ee0000,40), 
+     'ShRv '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='ShRv '
+
+if sellSignal and show_trade_info and not reversal and not sell_disable and math.abs(tradeOpenPL()) > 0
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#ee0000,40), 
+     'Sh '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Sh '
+ 
+if sellSignal and show_trade_info and     reversal and not buy_disable and math.abs(tradeOpenPL()) > 0
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#00bb00,40), 
+     'LgRv '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='LgRv '
+
+// ********************************************************************************************************************************************************** // 
+// ********************************************************************* STOP LOSS ************************************************************************** // 
+// ********************************************************************************************************************************************************** // 
+//if close <= (start_price - (start_price*sl/100)) and stp_loss_enable and str_lg and not buy_disable
+if close <= (strategy.position_avg_price - (strategy.position_avg_price*sl/100)) and stp_loss_enable and str_lg and not buy_disable
+
+    sl_lg := true
+    stop_loss:=true
+
+//if close >= (start_price + (start_price*sl/100)) and stp_loss_enable and str_sh and not sell_disable
+if close >= (strategy.position_avg_price + (strategy.position_avg_price*sl/100)) and stp_loss_enable and str_sh and not sell_disable
+
+    sl_sh := true
+    stop_loss:=true
+
+// *************************************************************************************************************** //
+// *************************************************************************************************************** //
+varip sl_price=float(na) // varip //
+
+if sl_lg and stp_loss_enable and not reversal and show_trade_info and str_lg and not buy_disable 
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#00aaff,40), 
+     'St Loss '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if sl_lg and stp_loss_enable and not reversal and str_lg
+    strategy.close_all(when = sl_lg and stp_loss_enable, alert_message = "c=position t=market cot=1", comment = 'Stop Lg '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    sl_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ******************************************************************************** // 
+if sl_sh and stp_loss_enable and not reversal and show_trade_info and str_sh and not sell_disable
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#ff5f00,40), 
+     'St Loss '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if sl_sh and stp_loss_enable and not reversal and str_sh
+    strategy.close_all(when = sl_sh and stp_loss_enable, alert_message = "c=position t=market cot=1", comment = 'Stop Sh '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    sl_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ******************************************************************************** //
+// ******************************************************************************** //
+if sl_lg and stp_loss_enable and reversal and show_trade_info and str_lg and not buy_disable
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#00aaff,40), 
+     'St Loss '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if sl_lg and stp_loss_enable and reversal and str_lg
+    strategy.close_all(when = sl_lg and stp_loss_enable, alert_message = "c=position t=market cot=1", comment = 'Stop Lg Rev '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    sl_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ******************************************************************************** // 
+if sl_sh and stp_loss_enable and reversal and show_trade_info and str_sh and not sell_disable
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#ff5f00,40), 
+     'St Loss '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if sl_sh and stp_loss_enable and reversal and str_sh
+    strategy.close_all(when = sl_sh and stp_loss_enable, alert_message = "c=position t=market cot=1", comment = 'Stop Sh Rev '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    sl_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ********************************************************************************************************************************************************** // 
+// ********************************************************************* TAKE PROFIT ************************************************************************ // 
+// ********************************************************************************************************************************************************** //
+//if close >= (start_price + (start_price*tp/100)) and tp_enable and str_lg and not buy_disable
+if close >= (strategy.position_avg_price + (strategy.position_avg_price*tp/100)) and tp_enable and str_lg and not buy_disable
+
+    tp_lg := true
+    take_profit:=true
+
+//if close <= (start_price - (start_price*tp/100)) and tp_enable and str_sh and not sell_disable
+if close <= (strategy.position_avg_price - (strategy.position_avg_price*tp/100)) and tp_enable and str_sh and not sell_disable
+
+    tp_sh := true
+    take_profit:=true
+
+// *************************************************************************************************************** //
+// *************************************************************************************************************** //
+varip tp_price=float(na) //varip //
+
+if tp_lg and tp_enable and not reversal and show_trade_info and str_lg and not buy_disable 
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#00aaff,40), 
+     'Take Profit '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if tp_lg and tp_enable and not reversal and str_lg
+    strategy.close_all(when = tp_lg and tp_enable, alert_message = "c=position t=market cot=1", comment = 'Take Profit Lg '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    tp_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ******************************************************************************** // 
+if tp_sh and tp_enable and not reversal and show_trade_info and str_sh and not sell_disable
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#ff5f00,40), 
+     'Take Profit '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if tp_sh and tp_enable and not reversal and str_sh
+    strategy.close_all(when = tp_sh and tp_enable, alert_message = "c=position t=market cot=1", comment = 'Take Profit Sh '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    tp_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ******************************************************************************** //
+// ******************************************************************************** //
+if tp_lg and tp_enable and reversal and show_trade_info and str_lg and not buy_disable
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#00aaff,40), 
+     'Take Profit '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if tp_lg and tp_enable and reversal and str_lg
+    strategy.close_all(when = tp_lg and tp_enable, alert_message = "c=position t=market cot=1", comment = 'Take Profit Lg Rev '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    tp_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ******************************************************************************** // 
+if tp_sh and tp_enable and reversal and show_trade_info and str_sh and not sell_disable
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#ff5f00,40), 
+     'Take Profit '+txt_end_trade,
+     pnl_color, size.normal)
+    trade_dir:='Null '
+
+if tp_sh and tp_enable and reversal and str_sh
+    strategy.close_all(when = tp_sh and tp_enable, alert_message = "c=position t=market cot=1", comment = 'Take Profit Sh Rev '+str.format('{0,number,#}',trade))
+    str_lg:=false
+    str_sh:=false
+    tp_price:=close
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+ 
+// ********************************************************************************************************************************************************** // 
+//                                                                           EXIT                                                                             //
+// ********************************************************************************************************************************************************** // 
+if changeCond and sellSignal and not reversal and sell_disable and show_trade_info and not stop_loss and not take_profit
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#f44ff0,40),
+     'ExLg '+txt_end_trade,
+     pnl_color, size.normal)
+    stop_loss:=false
+    take_profit:=false
+    trade_dir:='Null '
+
+if changeCond and sellSignal and not reversal and sell_disable 
+    strategy.close_all(alert_message = "c=position t=market cot=1", comment = 'Exit Lg '+str.format('{0,number,#}',trade)) 
+    stop_loss:=false
+    take_profit:=false
+    trade:=trade+1
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ********************************************************************************************************************************************************** //
+if changeCond and buySignal and not reversal and buy_disable and show_trade_info and not stop_loss and not take_profit
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#00ff87,40), 
+     'ExSh '+txt_end_trade,
+     pnl_color, size.normal)
+    stop_loss:=false
+    take_profit:=false
+    trade_dir:='Null '
+
+if changeCond and buySignal and not reversal and buy_disable
+    strategy.close_all(alert_message = "c=position t=market cot=1", comment = 'Exit Sh '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    trade:=trade+1
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ********************************************************************************************************************************************************** //
+// ********************************************************************************************************************************************************** //
+if changeCond and sellSignal and reversal and buy_disable and show_trade_info and not stop_loss and not take_profit
+    f2:=f_print2( 0,high_pos,label.style_label_down, color.new(#00ff87,40), 
+     'ExShRv '+txt_end_trade,
+     pnl_color, size.normal)
+    stop_loss:=false
+    take_profit:=false
+    trade_dir:='Null '
+
+if changeCond and sellSignal and reversal and buy_disable
+    strategy.close_all(alert_message = "c=position t=market cot=1", comment = 'Exit Sh Rev '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    trade:=trade+1
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ********************************************************************************************************************************************************** //
+if changeCond and buySignal and reversal and sell_disable and show_trade_info and not stop_loss and not take_profit
+    f2:=f_print2( 0,low_pos,label.style_label_up, color.new(#f44ff0,40), 
+     'ExLgRv '+txt_end_trade,
+     pnl_color, size.normal)
+    stop_loss:=false
+    take_profit:=false
+    trade_dir:='Null '
+
+if changeCond and buySignal and reversal and sell_disable
+    strategy.close_all(alert_message = "c=position t=market cot=1", comment = 'Exit Lg Rev '+str.format('{0,number,#}',trade))
+    stop_loss:=false
+    take_profit:=false
+    trade:=trade+1
+    current_so := 0
+    previous_high_value := 0
+    original_ttp_value := 0
+    original_ttp_value
+
+// ********************************************* Candle Colors According To Trend Direction ***************************************************************** //
+barcolor (not reversal and trend == -1 and barscolors and not sell_disable and not stop_loss and not take_profit ? color.new(#f8bbd0,0) : 
+ not reversal and trend == 1 and barscolors and not buy_disable and not stop_loss and not take_profit ? color.new(#c8e6c9,0) :
+ reversal and trend == -1 and barscolors and not sell_disable and not stop_loss and not take_profit ? color.new(#f8bbd0,0) :
+ reversal and trend == 1 and barscolors and not buy_disable and not stop_loss and not take_profit ? color.new(#c8e6c9,0) :
+ barscolors ? color.new(#131722,0) : na )
+
+// ********************************************** OPTIONNAL : [display=display.all] to display ************************************************************** //
+// src_plot = plot(source, title='Source Line', style=plot.style_line, linewidth=2,color=color.new(#00e2ff,20),display=display.none)
+
+// ********************************************************************************************************************************************************** //
+bk_color  =color.new(na,100)
+shp_color =color.new(na,100)
+
+if str_lg and (linreg > linreg[1])
+    bk_color:=not buy_disable  ? color.new(#2eff0a,trans_Col_bg) : color.new(#2eff0a,trans_Col_bg+10)
+    shp_color:=not buy_disable  ? color.new(#2eff0a,0) : color.new(#2eff0a,80)
+
+if str_lg and (linreg < linreg[1])
+    bk_color:=not buy_disable  ? color.new(#f4e87f,trans_Col_bg) : color.new(#f4e87f,trans_Col_bg+10)
+    shp_color:=not buy_disable  ? color.new(#f4e87f,0) : color.new(#f4e87f,80)
+    
+// ------------------------------------------------------------------------------------------------- //
+if str_sh and (linreg < linreg[1])
+    bk_color:=not sell_disable ? color.new(#ff0000,trans_Col_bg) : color.new(#ff0000,trans_Col_bg+10)
+    shp_color:=not sell_disable  ? color.new(#ff0000,0) : color.new(#ff0000,80)
+
+if str_sh and (linreg > linreg[1])
+    bk_color:=not sell_disable ? color.new(#75a2f2,trans_Col_bg) : color.new(#75a2f2,trans_Col_bg+10)
+    shp_color:=not sell_disable  ? color.new(#75a2f2,0) : color.new(#75a2f2,80)
+
+bgcolor(color=bk_color,title='Trend Bkg Color')
+plotshape(linreg, 'Regression Line',     style=shape.circle,location=location.absolute, color=shp_color,size=size.auto)
+plotshape(linreg, 'Regression Line Copy',style=shape.circle,location=location.bottom,   color=shp_color,size=size.auto)
+
+// ********************************************************************* Stop Loss Indicator ************************************************************************************ //
+//sl_lg_price=start_price - (start_price*sl/100)
+sl_lg_price=strategy.position_avg_price - (strategy.position_avg_price*sl/100)
+
+if show_sl_line and stp_loss_enable and not buy_disable  and sl_lg
+    sl_lg_price:=sl_price
+
+//sl_sh_price=start_price + (start_price*sl/100)
+sl_sh_price=strategy.position_avg_price + (strategy.position_avg_price*sl/100)
+
+if show_sl_line and stp_loss_enable and not sell_disable and sl_sh
+    sl_sh_price:=sl_price
+
+sl_line_lg=plot(show_sl_line and stp_loss_enable and not buy_disable  and (str_lg or sl_lg) ? sl_lg_price : na,
+ title='Stop loss Lg Line',  style=plot.style_linebr, linewidth=3, color=color.new(#ff0000,0))
+ 
+sl_line_sh=plot(show_sl_line and stp_loss_enable and not sell_disable and (str_sh or sl_sh) ? sl_sh_price : na,
+ title='Stop loss Sh Line',  style=plot.style_linebr, linewidth=3, color=color.new(#ff0000,0))
+fill(h2, sl_line_lg, color=color.new(#59595F,70), title="SO Long Plot Area")
+fill(h3, sl_line_sh, color=color.new(#59595F,70), title="SO Short Plot Area")
+// ********************************************************************* Take Profit Indicator ************************************************************************************ //
+//=start_price + (start_price*tp/100)
+tp_lg_price=strategy.position_avg_price + (strategy.position_avg_price*tp/100)
+
+if show_tp_line and tp_enable and not buy_disable  and tp_lg
+    tp_lg_price:=tp_price
+
+//tp_sh_price=start_price - (start_price*tp/100)
+tp_sh_price=strategy.position_avg_price - (strategy.position_avg_price*tp/100)
+
+if show_tp_line and tp_enable and not sell_disable and tp_sh
+    tp_sh_price:=tp_price
+
+tp_line_lg=plot(show_tp_line and tp_enable and not buy_disable  and (str_lg or tp_lg) ? tp_lg_price : na,
+ title='Take Profit Lg Line',  style=plot.style_linebr, linewidth=3, color=color.new(#00ff00,0))
+ 
+tp_line_sh=plot(show_tp_line and tp_enable and not sell_disable and (str_sh or tp_sh) ? tp_sh_price : na,
+ title='Take Profit Sh Line',  style=plot.style_linebr, linewidth=3, color=color.new(#00ff00,0))
+
+// ********************************************************************* Entry Price Indicator ********************************************************************************** //
+price_lg=plot(start_price , title='Start Price Lg Line',  style=plot.style_linebr, linewidth=3,
+ color=not changeCond and not buy_disable  and (str_lg or sl_lg or tp_lg) ? color.new(color.white,0) : na,trackprice=false)
+ 
+price_sh=plot(start_price , title='Start Price Sh Line',  style=plot.style_linebr, linewidth=3,
+ color=not changeCond and not sell_disable and (str_sh or sl_sh or tp_sh) ? color.new(color.white,0) : na,trackprice=false)
+
+// ********************************************************************* Stop Loss Background *********************************************************************************** //
+fill(price_lg, sl_line_lg , title='Stop Long Background',  color=show_sl_line and stp_loss_enable and not buy_disable  and sl_lg ? color.new(#ff2222,70): na)
+fill(price_sh, sl_line_sh , title='Stop Short Background', color=show_sl_line and stp_loss_enable and not sell_disable and sl_sh ? color.new(#ff2222,70): na)
+
+// ******************************************************************* Take Profit Background *********************************************************************************** //
+fill(price_lg, tp_line_lg , title='TP Long Background',  color=show_tp_line and tp_enable and not buy_disable  and tp_lg ? color.new(#22ff22,70): na)
+fill(price_sh, tp_line_sh , title='TP Short Background', color=show_tp_line and tp_enable and not sell_disable and tp_sh ? color.new(#22ff22,70): na)
+
+// ******************************************************************* Take Profit Background *********************************************************************************** //
+var f1=label(na)
+if trade==0 or barstate.ishistory
+    label.delete(f1)
+
+// ******************************************************************* Label Current Position *************************************************************** //
+// *************************************************************************************************************** //
+// *** Order Of Parameters For F_print_last: (_Offsetx, _Offsety, _Lab_styl, _Bkg_color, _Text, _Color_text, _Size) *** //
+// *************************************************************************************************************** //
+// f1:=f_print_last(6,close,label.style_label_left, strategy.openprofit>0 ? color.new(#aaffaa,50) : strategy.openprofit<0 ? color.new(#ff7777,50) : color.new(#cccccc,80), 
+//      trade_dir+txt_end_trade+'\nBar Idx :'+str.tostring(bar_index)+'\n'+conf, 
+//      color.new(#ffeaea,0), size.normal)
+
+f1:=f_print_last(6,close,label.style_label_left, strategy.openprofit>=0 ? color.new(#aaffaa,50) : strategy.openprofit<0 ? color.new(#ff7777,50) : color.new(#cccccc,80), 
+     trade_dir+txt_end_trade+'\n'+conf, 
+     pnl_color, size.normal)
+
+
+// ********************************************************************************************************************************************************** // 
+
+
+
+// ********************************************************************************************************************************************************** // 
+// ************************************************************************ END CODE ************************************************************************ // 
+// ********************************************************************************************************************************************************** //
+
+
+// ********************************************************************************************************************************************************** //
+
+
